@@ -1,0 +1,99 @@
+# Python 3.7 Lambda-like Runtime for Knative
+# The template supports an external source (workspace/repo) like the original
+# But also allows importing code and configuration from an existing Lambda function
+# * Published as part of our Knative as a Lambda-like FaaS blog series 
+#
+# Based on TriggerMesh's Python 3.7 runtime template and container image (great job!)
+# Container image seemed to be outdated in their gcr, the only thing that  
+# was done there is a latest rebuild and push to nwbeyal/knative-lambda-python37
+#
+# Additions by Eyal Avni @ Nuweba
+# Please note this is a proof of concept, mostly for learning purposes, use at your own risk :)
+# Feel free to contact myself (@thisiseyal on Twitter), or Nuweba on any matter.
+#
+# Enjoy :)
+
+apiVersion: build.knative.dev/v1alpha1
+kind: BuildTemplate
+metadata:
+  name: knative-python37-runtime
+spec:
+  parameters:
+  - name: IMAGE
+    description: The URI of the image to push, including registry host
+  - name: TAG
+    description: Tag of the image being pushed
+    default: latest
+  - name: HANDLER
+    description: If not importing from Lambda but only from source - the name of the function handler
+    default: "lambda_function.lambda_handler"
+  - name: INVOKER_COUNT
+    description: How many "invoker" processes should be run in each container? (Lambda's default is 1)
+    default: "1"
+  - name: LAMBDA_QUALIFIER
+    description: If importing a Lambda function - what specific revision should we take?
+    default: "$LATEST"
+  - name: TEMPORARY_OUTPUT_CODE_PATH
+    description: The temporary path where Lambda code import is downloaded to (and deleted afterwards).
+    default: /tmp/func-code.zip
+  - name: DIRECTORY
+    description: (In cases of code build from source instead/on top of Lambda import) The subdirectory of the workspace/repo
+    default: ""
+  steps:
+  - name: dockerfile
+    image: gcr.io/kaniko-project/executor@sha256:30ba460a034a8051b3222a32e20cb6049741e58384e3adf8c8987c004e2f2ab9
+    command:
+    - /busybox/sh
+    args:
+    - -c
+    - |
+      if [ -d "/workspace/${DIRECTORY}" ]; then
+        cd /workspace/${DIRECTORY}
+      fi
+      cat <<EOF > Dockerfile
+        FROM nuweba/knative-lambda-python37
+
+        ENV _HANDLER "${HANDLER}"
+        ENV AWS_EXECUTION_ENV=AWS_Lambda_python3.7
+        ENV AWS_REGION "${AWS_REGION}"
+        ENV AWS_DEFAULT_REGION "${AWS_REGION}"
+
+        RUN echo "#!/bin/sh" > /opt/init.sh && pip install boto3
+
+        RUN if [ "${AWS_LAMBDA_FUNCTION_NAME}" != "" ] ; then apk -uv add --no-cache groff jq less && pip install --no-cache-dir awscli ; \
+            (aws lambda get-function --region ${AWS_REGION} --function-name ${AWS_LAMBDA_FUNCTION_NAME} --query 'Code.Location' | xargs wget -O ${TEMPORARY_OUTPUT_CODE_PATH}) && unzip -qo ${TEMPORARY_OUTPUT_CODE_PATH} -d . && rm -f ${TEMPORARY_OUTPUT_CODE_PATH} ; \
+            for s in \$(echo \$(aws lambda get-function --region ${AWS_REGION} --function-name ${AWS_LAMBDA_FUNCTION_NAME} --query 'Configuration.Environment.Variables') | jq -r "to_entries|map(\"\(.key)=\(.value|tostring)\")|.[]"); do echo "Applying Lambda function environment variable \$s"; echo "export \$s" >> /opt/init.sh ; done ; \ 
+            echo "export _HANDLER=\$(aws lambda get-function --region ${AWS_REGION} --function-name ${AWS_LAMBDA_FUNCTION_NAME} --query 'Configuration.Handler')" >> /opt/init.sh; \
+            echo "export AWS_LAMBDA_FUNCTION_MEMORY_SIZE=\$(aws lambda get-function --region ${AWS_REGION} --function-name ${AWS_LAMBDA_FUNCTION_NAME} --qualifier '${LAMBDA_QUALIFIER}' --query 'Configuration.MemorySize')" >> /opt/init.sh ; \
+            echo "export AWS_LAMBDA_LOG_GROUP_NAME=/aws/lambda/${AWS_LAMBDA_FUNCTION_NAME}" >> /opt/init.sh ; \
+            echo "export FUNCTION_TTL=\$(aws lambda get-function --region ${AWS_REGION} --function-name ${AWS_LAMBDA_FUNCTION_NAME} --query 'Configuration.Timeout')" >> /opt/init.sh ; fi
+
+        RUN echo "/opt/aws-custom-runtime" >> /opt/init.sh && chmod +x /opt/init.sh
+
+        RUN echo "Final build environment variables:"; export
+
+        COPY . .
+
+        ENTRYPOINT ["/opt/init.sh"]
+      EOF
+    env: 
+    - name: AWS_LAMBDA_FUNCTION_NAME
+      valueFrom:
+        fieldRef:
+          fieldPath: metadata.annotations['lambda.amazonaws.com/name']
+    - name: AWS_REGION
+      valueFrom:
+        fieldRef:
+          fieldPath: metadata.annotations['lambda.amazonaws.com/region']
+  - name: export
+    image: gcr.io/kaniko-project/executor@sha256:30ba460a034a8051b3222a32e20cb6049741e58384e3adf8c8987c004e2f2ab9
+    args:
+    - --context=/workspace/${DIRECTORY}
+    - --dockerfile=/workspace/${DIRECTORY}/Dockerfile
+    - --destination=${IMAGE}:${TAG}
+    # Workaround not to use default config which requires gcloud credentials 
+    # to pull base image from public gcr registry 
+    # https://groups.google.com/d/msg/kaniko-users/r5yoP_Ejm_c/ExoEXksDBAAJ
+    env:
+    - name: DOCKER_CONFIG
+      value: "/"

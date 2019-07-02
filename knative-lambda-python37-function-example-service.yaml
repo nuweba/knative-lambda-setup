@@ -1,0 +1,88 @@
+## An example service using Python 3.7 Lambda-like Runtime for Knative
+## It is currently configured to "import" a Lambda function named 'python-runtime-playground', build and
+## push it to a private repository using Knative's Build module, then pull the image and Serve it :)  
+## Comments through the configuration explain quite in depth about each interesting field.
+## You can always check out our website's blog to see if any new information is out there
+##
+## https://www.nuweba.com
+## This was brought to you by Nuweba, written by Eyal Avni.
+## The file is published as part of our Knative as a Lambda-like FaaS blog series 
+## feel free to contact us or DM me on twitter (@thisieyal) for any matter
+
+apiVersion: serving.knative.dev/v1alpha1
+kind: Service
+metadata:
+  name: lambda-simple-http
+spec:
+  runLatest:
+    configuration:
+      build:
+        apiVersion: build.knative.dev/v1alpha1
+        kind: Build
+        metadata:
+          annotations:
+            ## These 3 annotations are the real deal. They define which role should run the builder, which is then used to export
+            ## the Lambda function defined in the second annotation (from the relevant AWS region), finally creating a docker 
+            ## container with the relevant function files and it's relevant configuration, 
+            ## then pushes it to the repository defined below (in the template arguments)
+            ## * Commenting the annotations out would try to build the function from source (which is commented out in this examaple).
+            ##   If both are commented out, well.. it will just build an empty function that probably fails upon requests :) 
+            iam.amazonaws.com/role: arn:aws:iam::XXXXXXXXXXXX:role/knative_tester
+            lambda.amazonaws.com/name: python-runtime-playground
+            lambda.amazonaws.com/region: us-west-1
+        spec:
+          serviceAccountName: knative-builder-nuweba
+          ############ Leave this section commented out if you're exporting a Lambda function and there's no reason to grab anything from a git repository
+          #source:
+          #   git:
+          #     url: https://github.com/serverless/examples.git
+          #     revision: master
+          template:
+            name: knative-python37-runtime
+            arguments:
+              ############ Leave these 2 parameters commented out if there's no reason to grab code from a git repository (goes together with the 'source' section up there)
+              # - name: DIRECTORY
+              #   value: aws-python-simple-http-endpoint
+              # - name: HANDLER
+              #   value: handler.endpoint
+              - name: IMAGE
+                value: docker.io/nuweba/knative-lambda-simple-http
+              - name: TAG
+                value: latest
+          timeout: 10m
+      revisionTemplate:
+        metadata:
+          annotations:
+            ## This would be the role your Lambda function *executes on*, could easily be found with the CLI "aws lambda get-function ... --query 'Configuration.Role'" 
+            iam.amazonaws.com/role: arn:aws:iam::XXXXXXXXXXXX:role/service-role/python-runtime-playground-role-5bzkz8tj
+            ## Define Lambda-like autoscaling, single concurrent execution per pod/container
+            autoscaling.knative.dev/class: kpa.autoscaling.knative.dev
+            autoscaling.knative.dev/metric: concurrency
+            autoscaling.knative.dev/target: "1"
+            ## Advanced features like warming up functions (minScale) and maximum concurrency (maxScale) can be enabled by:
+            # autoscaling.knative.dev/minScale: "1"
+            # autoscaling.knative.dev/maxScale: "100"
+        spec:
+          ## Mention that the container's concurrency is single as well as the autoscaler's targets, to fit with Lambda
+          containerConcurrency: 1
+          container:
+            image: docker.io/nuweba/knative-lambda-simple-http:latest
+            imagePullPolicy: Always
+            resources:
+              requests:
+                ## Over-provisioning isn't necessarily what you want to see, just assuming you wouldn't need truly reserved
+                ## computing resources and only peak to limits occasionally, can be discussed per application though..
+                memory: "24Mi"
+                cpu: "50m"
+              limits:
+                ## The original function memory limit was 128MB, but the runtime seems to be "heavier" and gave OOMs
+                ## And the solution? Well, I just accepted the fact there's some overhead :(
+                memory: "192Mi"
+                cpu: "500m"
+            env:
+              ## This one is quite important and has to do with the runtime implementation, as we are using TM's custom lambda runtime,
+              ## the way they tell the server to build events and marshal the response is through this environment variable, as this
+              ## example is used with an API Gateway-based function in the article, we're gonna set it, with a value of API_GATEWAY
+              ## Unsetting the variable does no harm, but just makes your server act as a non-apigw Lambda invocation
+              - name: EVENT
+                value: API_GATEWAY
