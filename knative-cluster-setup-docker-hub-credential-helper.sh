@@ -2,4 +2,4 @@
 DOCKERHUB_USER=replaceme
 DOCKERHUB_PASS=replaceme
 B64USER=$(echo -n $DOCKERHUB_USER | base64); B64PASS=$(echo -n $DOCKERHUB_PASS | base64); 
-curl -fsS https://gist.githubusercontent.com/thisiseyal/0074b920d0b80190b477f6794d7f7877/raw/knative-docker-hub-credentials-template.yaml | sed -e "s/REPLACE_WITH_YOUR_BASE64_USERNAME/$B64USER/g; s/REPLACE_WITH_YOUR_BASE64_PASSWORD/$B64PASS/g" | kubectl apply -f -
+curl -fsS https://raw.githubusercontent.com/nuweba/knative-lambda-setup/master/knative-docker-hub-credentials-template.yaml | sed -e "s/REPLACE_WITH_YOUR_BASE64_USERNAME/$B64USER/g; s/REPLACE_WITH_YOUR_BASE64_PASSWORD/$B64PASS/g" | kubectl apply -f -
