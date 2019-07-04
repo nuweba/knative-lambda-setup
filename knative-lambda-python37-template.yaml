@@ -5,7 +5,7 @@
 #
 # Based on TriggerMesh's Python 3.7 runtime template and container image (great job!)
 # Container image seemed to be outdated in their gcr, the only thing that  
-# was done there is a latest rebuild and push to nwbeyal/knative-lambda-python37
+# was done there is a latest rebuild and push to nuweba/knative-lambda-python37
 #
 # Additions by Eyal Avni @ Nuweba
 # Please note this is a proof of concept, mostly for learning purposes, use at your own risk :)
